@@ -85,7 +85,7 @@ This system leverages Google's advanced AI services for superior performance:
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/lav24fr/MediScribe-AI.git
 cd mediscribe-ai
 ```
 
