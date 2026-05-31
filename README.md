@@ -16,10 +16,12 @@ A comprehensive medical transcription and AI-powered summary generation system d
 ### Medical-Specific Features
 
 - **Structured Medical Documentation**: Follow standard medical documentation practices
+- **Patient-Facing After-Visit Summary**: Automatically generates a simplified, jargon-free summary at an 8th-grade reading level.
+- **Smart E-Prescription**: Automatically detects medications and generates draft prescriptions with dosage and frequency.
+- **Clinical Decision Support Alerts**: Cross-references prescribed medications with patient allergies and flags conflicts.
 - **ICD-10 & CPT Code Integration**: Automatic coding suggestions
-- **Patient Management**: Link consultations to patient records
 - **Symptom & Diagnosis Tracking**: Extract and categorize medical information
-- **Multi-format Export**: Export summaries as PDF, Word, or JSON
+- **Multi-format Export**: Export summaries and patient instructions securely as PDF or JSON
 
 ### Technical Features
 
