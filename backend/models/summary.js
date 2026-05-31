@@ -17,7 +17,7 @@ const summarySchema = new mongoose.Schema({
   content: {
     chiefComplaint: {
       type: String,
-      required: true,
+      required: function() { return this.status === 'completed'; },
       trim: true
     },
     historyOfPresentIllness: {
@@ -54,12 +54,12 @@ const summarySchema = new mongoose.Schema({
     },
     assessment: {
       type: String,
-      required: true,
+      required: function() { return this.status === 'completed'; },
       trim: true
     },
     plan: {
       type: String,
-      required: true,
+      required: function() { return this.status === 'completed'; },
       trim: true
     },
     followUp: {
@@ -119,7 +119,23 @@ const summarySchema = new mongoose.Schema({
       oxygenSaturation: String,
       weight: String,
       height: String
-    }
+    },
+    allergies: [String],
+    clinicalAlerts: [{
+      alertType: {
+        type: String,
+        enum: ['drug_interaction', 'allergy_conflict', 'contraindication']
+      },
+      description: String,
+      severity: {
+        type: String,
+        enum: ['low', 'medium', 'high']
+      }
+    }]
+  },
+  patientSummary: {
+    type: String,
+    trim: true
   },
   generationMetadata: {
     model: {

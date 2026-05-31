@@ -8,11 +8,13 @@ import {
   ListItem,
   Chip,
   CircularProgress,
-  Button
+  Button,
+  IconButton
 } from '@mui/material';
+import { Delete as DeleteIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 
-const SessionList = ({ sessions = [], loading = false, onSessionSelect }) => {
+const SessionList = ({ sessions = [], loading = false, onSessionSelect, onSessionDelete }) => {
   const navigate = useNavigate();
 
   const handleSessionClick = (session) => {
@@ -80,7 +82,7 @@ const SessionList = ({ sessions = [], loading = false, onSessionSelect }) => {
                 onClick={() => handleSessionClick(session)}
               >
                 <CardContent>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
                     <Box>
                       <Typography variant="h6">
                         Dr. {session.doctorName}
@@ -92,11 +94,27 @@ const SessionList = ({ sessions = [], loading = false, onSessionSelect }) => {
                         </Typography>
                       )}
                     </Box>
-                    <Chip 
-                      label={session.status} 
-                      color={getStatusColor(session.status)}
-                      size="small"
-                    />
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Chip 
+                        label={session.status} 
+                        color={getStatusColor(session.status)}
+                        size="small"
+                      />
+                      {onSessionDelete && (
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm("Are you sure you want to delete this session?")) {
+                              onSessionDelete(session._id);
+                            }
+                          }}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      )}
+                    </Box>
                   </Box>
                   
                   <Typography variant="body2" color="text.secondary" gutterBottom>

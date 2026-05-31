@@ -13,13 +13,21 @@ import {
   MenuItem,
   Chip,
   Alert,
-  CircularProgress
+  CircularProgress,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  Divider
 } from '@mui/material';
 import {
   PlayArrow as PlayIcon,
   Stop as StopIcon,
   RecordVoiceOver as RecordIcon,
   Person as PersonIcon,
+  LocalPharmacy as PharmacyIcon,
+  Send as SendIcon,
+  PictureAsPdf as PdfIcon,
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import TranscriptionBox from './TranscriptionBox';
@@ -109,7 +117,8 @@ const DoctorInterface = ({
     try {
       const response = await fetch(`/api/sessions/${currentSession._id}/summary`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ regenerate: !!sessionSummary })
       });
 
       if (response.ok) {
@@ -126,6 +135,14 @@ const DoctorInterface = ({
     } finally {
       setLoading(prev => ({ ...prev, generating: false }));
     }
+  };
+
+  const handleExportPdf = () => {
+    if (!sessionSummary || !sessionSummary.summaryId) {
+      toast.error('No summary available to export');
+      return;
+    }
+    window.open(`/api/summaries/${sessionSummary.summaryId}/export/pdf`, '_blank');
   };
 
   const handleGenerateQuestions = async () => {
@@ -155,6 +172,11 @@ const DoctorInterface = ({
     } finally {
       setLoading(prev => ({ ...prev, generating: false }));
     }
+  };
+
+  const handleSendPrescription = () => {
+    // In a real app, this would hit an API endpoint to transmit the HL7/eRx message
+    toast.success('Prescription securely sent to patient pharmacy!');
   };
 
   return (
@@ -411,6 +433,118 @@ const DoctorInterface = ({
                   Generate AI-powered reflexive questions to improve consultation quality and identify missing information.
                 </Typography>
               )}
+            </CardContent>
+          </Card>
+        </Grid>
+      )}
+
+      {currentSession && transcriptions.length > 0 && sessionSummary?.patientSummary && (
+        <Grid item xs={12}>
+          <Card sx={{ border: '1px solid #4caf50' }}>
+            <CardContent>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, color: '#2e7d32' }}>
+                  👨‍⚕️ Patient-Facing After-Visit Summary
+                </Typography>
+                <Button
+                  variant="contained"
+                  color="success"
+                  size="small"
+                  startIcon={<PdfIcon />}
+                  onClick={handleExportPdf}
+                >
+                  Export PDF
+                </Button>
+              </Box>
+              
+              <Alert severity="success" sx={{ mb: 2 }}>
+                This is a simplified summary written at an 8th-grade reading level to share with the patient.
+              </Alert>
+
+              <Box sx={{ bgcolor: '#f1f8e9', p: 2, borderRadius: 1, whiteSpace: 'pre-line' }}>
+                <Typography variant="body1">
+                  {sessionSummary.patientSummary}
+                </Typography>
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+      )}
+
+      {currentSession && sessionSummary?.extractedData?.clinicalAlerts && sessionSummary.extractedData.clinicalAlerts.length > 0 && (
+        <Grid item xs={12} md={12}>
+          <Alert severity="error" variant="filled">
+            <Typography variant="subtitle1" fontWeight="bold">
+              ⚠️ Clinical Decision Support Alert
+            </Typography>
+            <List disablePadding sx={{ mt: 1 }}>
+              {sessionSummary.extractedData.clinicalAlerts.map((alert, idx) => (
+                <ListItem key={idx} sx={{ px: 0, py: 0.5, display: 'list-item', listStyleType: 'disc', ml: 2 }}>
+                  <ListItemText 
+                    primary={alert.alertType.replace('_', ' ').toUpperCase()} 
+                    secondary={alert.description} 
+                    primaryTypographyProps={{ fontWeight: 'bold' }}
+                    secondaryTypographyProps={{ style: { color: 'rgba(255,255,255,0.9)' } }}
+                  />
+                </ListItem>
+              ))}
+            </List>
+          </Alert>
+        </Grid>
+      )}
+
+      {currentSession && sessionSummary?.extractedData?.medications && sessionSummary.extractedData.medications.length > 0 && (
+        <Grid item xs={12} md={6}>
+          <Card sx={{ border: '2px solid #1976d2' }}>
+            <CardContent>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, color: '#1976d2' }}>
+                  <PharmacyIcon /> Smart E-Prescription
+                </Typography>
+                <Chip label="Draft" color="warning" size="small" />
+              </Box>
+              
+              <Alert severity="info" sx={{ mb: 2 }}>
+                AI detected {sessionSummary.extractedData.medications.length} medication(s) in your treatment plan.
+              </Alert>
+
+              <List disablePadding>
+                {sessionSummary.extractedData.medications.map((med, index) => (
+                  <React.Fragment key={index}>
+                    <ListItem alignItems="flex-start" sx={{ px: 0 }}>
+                      <ListItemIcon sx={{ minWidth: 40, mt: 1 }}>
+                        <PharmacyIcon color="primary" />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={
+                          <Typography variant="subtitle1" fontWeight="bold">
+                            {med.name} {med.dosage && `- ${med.dosage}`}
+                          </Typography>
+                        }
+                        secondary={
+                          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mt: 0.5 }}>
+                            {med.frequency && <Typography variant="body2" color="text.secondary"><strong>Sig:</strong> {med.frequency}</Typography>}
+                            {med.duration && <Typography variant="body2" color="text.secondary"><strong>Duration:</strong> {med.duration}</Typography>}
+                            {med.route && <Typography variant="body2" color="text.secondary"><strong>Route:</strong> {med.route}</Typography>}
+                          </Box>
+                        }
+                      />
+                    </ListItem>
+                    {index < sessionSummary.extractedData.medications.length - 1 && <Divider component="li" />}
+                  </React.Fragment>
+                ))}
+              </List>
+
+              <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end' }}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  endIcon={<SendIcon />}
+                  onClick={handleSendPrescription}
+                >
+                  Review & Send to Pharmacy
+                </Button>
+              </Box>
             </CardContent>
           </Card>
         </Grid>

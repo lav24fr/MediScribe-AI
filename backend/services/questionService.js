@@ -1,53 +1,32 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Groq = require('groq-sdk');
 const Session = require('../models/session');
 const config = require('../config');
-const graphService = require('./graphService'); 
+const graphService = require('./graphService');
 
-let genAI = null;
-let model = null;
+let groq = null;
 try {
-  if (config.geminiApiKey) {
-    genAI = new GoogleGenerativeAI(config.geminiApiKey);
-    model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    console.log('Google Gemini client initialized for question service');
+  if (config.groqApiKey) {
+    groq = new Groq({ apiKey: config.groqApiKey });
+    console.log('Groq client initialized for question service');
   } else {
-    console.warn('Warning: GEMINI_API_KEY not found. Question generation will not work.');
+    console.warn('Warning: GROQ_API_KEY not found. Question generation will not work.');
   }
 } catch (error) {
-  console.error('Failed to initialize Google Gemini client for questions:', error);
+  console.error('Failed to initialize Groq client for questions:', error);
 }
 
 const questionService = {
   async generateReflexiveQuestions(sessionId, transcriptionText) {
     const startTime = Date.now();
-    
     try {
       console.log(`Starting question generation for session: ${sessionId}`);
+      if (!groq) throw new Error('Groq API not configured for question generation.');
+      const session = await Session.findById(sessionId).populate('transcriptions').populate('patient').exec(); 
+      if (!session) throw new Error('Session not found for question generation');
 
-      if (!model) {
-        throw new Error('Gemini API not configured for question generation.');
-      }
-
-      const session = await Session.findById(sessionId)
-        .populate('transcriptions')
-        .populate('patient')
-        .exec(); 
-        
-      if (!session) {
-        throw new Error('Session not found for question generation');
-      }
-
-      const completedTranscriptions = session.transcriptions
-        .filter(t => t.status === 'completed');
-        
-      if (!completedTranscriptions || completedTranscriptions.length === 0) {
-        throw new Error('No completed transcriptions found');
-      }
-      
-      const combinedTranscriptionText = completedTranscriptions
-        .map(t => t.transcriptionText)
-        .join('\n\n');
-
+      const completedTranscriptions = session.transcriptions.filter(t => t.status === 'completed');
+      if (!completedTranscriptions || completedTranscriptions.length === 0) throw new Error('No completed transcriptions found');
+      const combinedTranscriptionText = completedTranscriptions.map(t => t.transcriptionText).join('\n\n');
 
       let patientContext = '';
       if (session.patient && session.patient.patientId) {
@@ -67,12 +46,11 @@ const questionService = {
         followUp: followUpQuestions,
         differential: differentialQuestions,
         metadata: {
-          model: 'gemini-1.5-flash',
+          model: 'llama-3.3-70b-versatile',
           processingTime,
           generatedAt: new Date().toISOString()
         }
       };
-
     } catch (error) {
       console.error(`Question generation failed:`, error);
       throw error;
@@ -80,113 +58,97 @@ const questionService = {
   },
 
   async generateClinicalQuestions(transcriptionText, patientContext = '') {
-    const contextSection = patientContext.trim() 
-      ? `PATIENT HISTORY CONTEXT (from Knowledge Graph):\n${patientContext}\n\n` 
-      : '';
-
+    const contextSection = patientContext.trim() ? `PATIENT HISTORY CONTEXT (from Knowledge Graph):\n${patientContext}\n\n` : '';
     const prompt = `${contextSection}Based on this medical consultation transcript, and considering the patient's history, generate important clinical questions that should be asked to better understand the patient's *current* condition.
-...
-    Response (JSON array only):`;
+    Return a JSON object with a single field "questions" containing an array of objects.
+    Each object in the "questions" array must have fields: question, category, priority (1-5), rationale.
+    
+    Transcript: ${transcriptionText.substring(0, 3000)}
+    
+    Response (JSON only):`;
 
     try {
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-      
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
-      const jsonText = jsonMatch ? jsonMatch[0] : '[]';
-      
-      return JSON.parse(jsonText);
+      const response = await groq.chat.completions.create({
+        messages: [{ role: 'user', content: prompt }],
+        model: 'llama-3.3-70b-versatile',
+        response_format: { type: 'json_object' },
+      });
+      const parsed = JSON.parse(response.choices[0].message.content);
+      return parsed.questions || [];
     } catch (error) {
       console.error('Clinical questions generation failed:', error);
-      return [{
-        question: "What other symptoms is the patient experiencing?",
-        category: "symptom_assessment",
-        priority: 3,
-        rationale: "Unable to generate specific questions automatically"
-      }];
+      return [{ question: "What other symptoms is the patient experiencing?", category: "symptom_assessment", priority: 3, rationale: "Unable to generate specific questions automatically" }];
     }
   },
 
   async generateFollowUpQuestions(transcriptionText, patientContext = '') {
-    const contextSection = patientContext.trim() 
-      ? `PATIENT HISTORY CONTEXT (from Knowledge Graph):\n${patientContext}\n\n` 
-      : '';
-
+    const contextSection = patientContext.trim() ? `PATIENT HISTORY CONTEXT (from Knowledge Graph):\n${patientContext}\n\n` : '';
     const prompt = `${contextSection}Based on this medical consultation, and considering the patient's existing chronic conditions and past treatments, generate important follow-up questions for the patient's next visit or ongoing care.
-...
-    Response (JSON array only):`;
+    Return a JSON object with a single field "questions" containing an array of objects.
+    Each object in the "questions" array must have fields: question, category, timeframe, importance.
+    
+    Transcript: ${transcriptionText.substring(0, 3000)}
+    
+    Response (JSON only):`;
 
     try {
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-      
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
-      const jsonText = jsonMatch ? jsonMatch[0] : '[]';
-      
-      return JSON.parse(jsonText);
+      const response = await groq.chat.completions.create({
+        messages: [{ role: 'user', content: prompt }],
+        model: 'llama-3.3-70b-versatile',
+        response_format: { type: 'json_object' },
+      });
+      const parsed = JSON.parse(response.choices[0].message.content);
+      return parsed.questions || [];
     } catch (error) {
       console.error('Follow-up questions generation failed:', error);
-      return [{
-        question: "How is the patient responding to the current treatment plan?",
-        category: "treatment_response",
-        timeframe: "short_term",
-        importance: "medium"
-      }];
+      return [{ question: "How is the patient responding to the current treatment plan?", category: "treatment_response", timeframe: "short_term", importance: "medium" }];
     }
   },
 
   async generateDifferentialQuestions(transcriptionText, patientContext = '') {
-    const contextSection = patientContext.trim() 
-      ? `PATIENT HISTORY CONTEXT (from Knowledge Graph):\n${patientContext}\n\n` 
-      : '';
-
+    const contextSection = patientContext.trim() ? `PATIENT HISTORY CONTEXT (from Knowledge Graph):\n${patientContext}\n\n` : '';
     const prompt = `${contextSection}Based on this medical consultation, and keeping in mind the patient's known diagnoses and past symptoms, generate questions that would help differentiate between possible *new* diagnoses or rule out serious conditions.
-...
-    Response (JSON array only):`;
+    Return a JSON object with a single field "questions" containing an array of objects.
+    Each object in the "questions" array must have fields: question, purpose, urgency, diagnostic_value.
+    
+    Transcript: ${transcriptionText.substring(0, 3000)}
+    
+    Response (JSON only):`;
 
     try {
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-      
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
-      const jsonText = jsonMatch ? jsonMatch[0] : '[]';
-      
-      return JSON.parse(jsonText);
+      const response = await groq.chat.completions.create({
+        messages: [{ role: 'user', content: prompt }],
+        model: 'llama-3.3-70b-versatile',
+        response_format: { type: 'json_object' },
+      });
+      const parsed = JSON.parse(response.choices[0].message.content);
+      return parsed.questions || [];
     } catch (error) {
       console.error('Differential questions generation failed:', error);
-      return [{
-        question: "Are there any other conditions that could explain these symptoms?",
-        purpose: "Consider alternative diagnoses",
-        urgency: "routine",
-        diagnostic_value: "medium"
-      }];
+      return [{ question: "Are there any other conditions that could explain these symptoms?", purpose: "Consider alternative diagnoses", urgency: "routine", diagnostic_value: "medium" }];
     }
   },
 
   async generatePatientEducationQuestions(transcriptionText) {
     const prompt = `Based on this consultation, generate questions that would help educate the patient about their condition and improve their understanding.
-...
-    Response (JSON array only):`;
+    Return a JSON object with a single field "questions" containing an array of objects.
+    Each object in the "questions" array must have fields: question, educational_goal, patient_benefit.
+    
+    Transcript: ${transcriptionText.substring(0, 3000)}
+    
+    Response (JSON only):`;
 
     try {
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-      
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
-      const jsonText = jsonMatch ? jsonMatch[0] : '[]';
-      
-      return JSON.parse(jsonText);
+      const response = await groq.chat.completions.create({
+        messages: [{ role: 'user', content: prompt }],
+        model: 'llama-3.3-70b-versatile',
+        response_format: { type: 'json_object' },
+      });
+      const parsed = JSON.parse(response.choices[0].message.content);
+      return parsed.questions || [];
     } catch (error) {
       console.error('Patient education questions generation failed:', error);
-      return [{
-        question: "Do you have any questions about your condition or treatment?",
-        educational_goal: "Ensure patient understanding",
-        patient_benefit: "Improved treatment compliance"
-      }];
+      return [{ question: "Do you have any questions about your condition or treatment?", educational_goal: "Ensure patient understanding", patient_benefit: "Improved treatment compliance" }];
     }
   }
 };

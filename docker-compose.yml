@@ -39,14 +39,16 @@ services:
     container_name: mediscribe-backend
     restart: unless-stopped
     ports:
-      - "5000:5000"
+      - "5001:5000"
     environment:
       NODE_ENV: production
       PORT: 5000
       MONGO_URI: mongodb://admin:password123@mongo:27017/mediscribe-ai?authSource=admin
       REDIS_URL: redis://:redispassword123@redis:6379
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      WHISPER_API_KEY: ${WHISPER_API_KEY}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-fallback}
+      GOOGLE_CLOUD_PROJECT_ID: ${GOOGLE_CLOUD_PROJECT_ID}
+      GOOGLE_CLOUD_KEY_FILE: ${GOOGLE_CLOUD_KEY_FILE}
       JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key}
       FRONTEND_URL: http://localhost:3000
     volumes:
@@ -68,7 +70,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      REACT_APP_API_URL: http://localhost:5000/api
+      REACT_APP_API_URL: http://localhost:5001/api
       GENERATE_SOURCEMAP: false
     depends_on:
       - backend

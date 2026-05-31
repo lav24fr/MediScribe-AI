@@ -48,7 +48,8 @@ const TranscriptionBox = ({
 
   useEffect(() => {
     if (sessionId) {
-      socketRef.current = io('http://localhost:5000');
+      const baseUrl = process.env.REACT_APP_API_URL ? process.env.REACT_APP_API_URL.replace('/api', '') : 'http://localhost:5001';
+      socketRef.current = io(baseUrl);
       
       socketRef.current.emit('join-session', sessionId);
       
@@ -500,7 +501,8 @@ const TranscriptionBox = ({
                       sx={{ 
                         mt: 1,
                         fontStyle: transcription.status === 'processing' ? 'italic' : 'normal',
-                        color: transcription.status === 'processing' ? 'text.secondary' : 'text.primary'
+                        color: transcription.status === 'processing' ? 'text.secondary' : 'text.primary',
+                        whiteSpace: 'pre-wrap'
                       }}
                     >
                       {transcription.transcriptionText}

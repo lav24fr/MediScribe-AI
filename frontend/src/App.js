@@ -115,11 +115,12 @@ function AppContent() {
           setCurrentSession(null);
           toast.success("Session ended successfully.");
         } else {
-          toast.error("Failed to end the session on the server.");
+          const errorData = await response.json().catch(() => ({}));
+          toast.error(errorData.message || "Failed to end the session on the server.");
         }
       } catch (error) {
         console.error("Error ending session:", error);
-        toast.error("An error occurred while ending the session.");
+        toast.error("An error occurred while ending the session: " + error.message);
       }
     }
   };
@@ -136,6 +137,26 @@ function AppContent() {
       console.error("Failed to load sessions:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const deleteSession = async (id) => {
+    try {
+      const response = await fetch(`/api/sessions/${id}`, {
+        method: "DELETE",
+      });
+      if (response.ok) {
+        setSessions((prev) => prev.filter((session) => session._id !== id));
+        if (currentSession && currentSession._id === id) {
+          setCurrentSession(null);
+        }
+        toast.success("Session deleted successfully.");
+      } else {
+        toast.error("Failed to delete the session.");
+      }
+    } catch (error) {
+      console.error("Error deleting session:", error);
+      toast.error("An error occurred while deleting the session.");
     }
   };
 
@@ -210,6 +231,7 @@ function AppContent() {
                 sessions={sessions}
                 loading={loading}
                 onSessionSelect={(session) => setCurrentSession(session)}
+                onSessionDelete={deleteSession}
               />
             }
           />

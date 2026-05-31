@@ -1,7 +1,8 @@
-const Summary = require('../models/summary');
-const Session = require('../models/session');
-const summaryService = require('../services/summaryService');
-const graphService = require('../services/graphService');
+const Summary = require("../models/summary");
+const Session = require("../models/session");
+const Patient = require("../models/patient");
+const summaryService = require("../services/summaryService");
+const graphService = require("../services/graphService");
 
 const summaryController = {
   async generateSummary(req, res) {
@@ -10,28 +11,29 @@ const summaryController = {
       const { regenerate = false } = req.body;
 
       const session = await Session.findById(sessionId)
-        .populate('transcriptions')
-        .populate('summary');
+        .populate("transcriptions")
+        .populate("summary");
 
       if (!session) {
         return res.status(404).json({
-          error: 'Session not found',
-          message: 'The specified session does not exist'
+          error: "Session not found",
+          message: "The specified session does not exist",
         });
       }
 
       if (!session.transcriptions || session.transcriptions.length === 0) {
         return res.status(400).json({
-          error: 'No transcriptions found',
-          message: 'Cannot generate summary without transcriptions'
+          error: "No transcriptions found",
+          message: "Cannot generate summary without transcriptions",
         });
       }
 
       if (session.summary && !regenerate) {
         return res.status(400).json({
-          error: 'Summary already exists',
-          message: 'Summary already exists for this session. Use regenerate=true to create a new version',
-          summaryId: session.summary.summaryId
+          error: "Summary already exists",
+          message:
+            "Summary already exists for this session. Use regenerate=true to create a new version",
+          summaryId: session.summary.summaryId,
         });
       }
 
@@ -39,12 +41,12 @@ const summaryController = {
 
       if (session.summary && regenerate) {
         summary = session.summary;
-        summary.status = 'generating';
+        summary.status = "generating";
         await summary.save();
       } else {
         summary = new Summary({
           session: sessionId,
-          status: 'generating'
+          status: "generating",
         });
         await summary.save();
 
@@ -52,61 +54,70 @@ const summaryController = {
         await session.save();
       }
 
-      summaryService.generateSummary(sessionId, summary._id)
-        .then(async (result) => {
-          if (regenerate && session.summary) {
-            await summary.createNewVersion(result.content, 'ai-generated');
-          } else {
-            summary.content = result.content;
-            summary.keyPoints = result.keyPoints;
-            summary.extractedData = result.extractedData;
-            summary.generationMetadata = result.metadata;
-            summary.status = 'completed';
-            await summary.save();
-          }
+      try {
+        const result = await summaryService.generateSummary(sessionId, summary._id);
 
-          try {
-            const patient = await Patient.findById(session.patient);
-            if (patient) {
-              await graphService.buildKnowledgeGraph(session, patient, result.extractedData);
-            }
-          } catch (graphError) {
-            console.error('Failed to build knowledge graph:', graphError);
-          }
-
-          console.log(`Summary generated for session: ${sessionId}`);
-
-          if (req.app.get('io')) {
-            req.app.get('io').to(sessionId).emit('summary-completed', {
-              summaryId: summary.summaryId,
-              sessionId: sessionId
-            });
-          }
-        })
-        .catch(async (error) => {
-          console.error(`Summary generation failed for session: ${sessionId}`, error);
-          summary.status = 'failed';
+        if (regenerate && session.summary) {
+          summary.keyPoints = result.keyPoints;
+          summary.extractedData = result.extractedData;
+          summary.generationMetadata = result.metadata;
+          summary.patientSummary = result.patientSummary;
+          await summary.createNewVersion(result.content, "ai-generated");
+        } else {
+          summary.content = result.content;
+          summary.keyPoints = result.keyPoints;
+          summary.extractedData = result.extractedData;
+          summary.generationMetadata = result.metadata;
+          summary.patientSummary = result.patientSummary;
+          summary.status = "completed";
           await summary.save();
+        }
 
-          if (req.app.get('io')) {
-            req.app.get('io').to(sessionId).emit('summary-failed', {
-              summaryId: summary.summaryId,
-              error: error.message
-            });
+        try {
+          const patient = await Patient.findById(session.patient);
+          if (patient) {
+            await graphService.buildKnowledgeGraph(
+              session,
+              patient,
+              result.extractedData,
+            );
           }
+        } catch (graphError) {
+          console.error("Failed to build knowledge graph:", graphError);
+        }
+
+        console.log(`Summary generated for session: ${sessionId}`);
+
+        if (req.app.get("io")) {
+          req.app.get("io").to(sessionId).emit("summary-completed", {
+            summaryId: summary.summaryId,
+            sessionId: sessionId,
+          });
+        }
+
+        res.status(200).json(summary);
+      } catch (error) {
+        console.error(`Summary generation failed for session: ${sessionId}`, error);
+        summary.status = "failed";
+        await summary.save();
+
+        if (req.app.get("io")) {
+          req.app.get("io").to(sessionId).emit("summary-failed", {
+            summaryId: summary.summaryId,
+            error: error.message,
+          });
+        }
+
+        res.status(500).json({
+          error: "Generation failed",
+          message: error.message,
         });
-
-      res.status(202).json({
-        message: 'Summary generation started',
-        summaryId: summary.summaryId,
-        status: 'generating'
-      });
-
+      }
     } catch (error) {
-      console.error('Error in generateSummary:', error);
+      console.error("Error in generateSummary:", error);
       res.status(500).json({
-        error: 'Internal server error',
-        message: 'Failed to start summary generation'
+        error: "Internal server error",
+        message: "Failed to start summary generation",
       });
     }
   },
@@ -116,13 +127,15 @@ const summaryController = {
       const { summaryId } = req.params;
       const { includeHistory = false } = req.query;
 
-      const summary = await Summary.findOne({ summaryId })
-        .populate('session', 'sessionId doctorName startTime endTime duration');
+      const summary = await Summary.findOne({ summaryId }).populate(
+        "session",
+        "sessionId doctorName startTime endTime duration",
+      );
 
       if (!summary) {
         return res.status(404).json({
-          error: 'Summary not found',
-          message: 'The specified summary does not exist'
+          error: "Summary not found",
+          message: "The specified summary does not exist",
         });
       }
 
@@ -131,12 +144,11 @@ const summaryController = {
       }
 
       res.json(summary);
-
     } catch (error) {
-      console.error('Error in getSummary:', error);
+      console.error("Error in getSummary:", error);
       res.status(500).json({
-        error: 'Internal server error',
-        message: 'Failed to retrieve summary'
+        error: "Internal server error",
+        message: "Failed to retrieve summary",
       });
     }
   },
@@ -145,29 +157,28 @@ const summaryController = {
     try {
       const { sessionId } = req.params;
 
-      const session = await Session.findById(sessionId).populate('summary');
+      const session = await Session.findById(sessionId).populate("summary");
 
       if (!session) {
         return res.status(404).json({
-          error: 'Session not found',
-          message: 'The specified session does not exist'
+          error: "Session not found",
+          message: "The specified session does not exist",
         });
       }
 
       if (!session.summary) {
         return res.status(404).json({
-          error: 'Summary not found',
-          message: 'No summary exists for this session'
+          error: "Summary not found",
+          message: "No summary exists for this session",
         });
       }
 
       res.json(session.summary);
-
     } catch (error) {
-      console.error('Error in getSessionSummary:', error);
+      console.error("Error in getSessionSummary:", error);
       res.status(500).json({
-        error: 'Internal server error',
-        message: 'Failed to retrieve session summary'
+        error: "Internal server error",
+        message: "Failed to retrieve session summary",
       });
     }
   },
@@ -181,8 +192,8 @@ const summaryController = {
 
       if (!summary) {
         return res.status(404).json({
-          error: 'Summary not found',
-          message: 'The specified summary does not exist'
+          error: "Summary not found",
+          message: "The specified summary does not exist",
         });
       }
 
@@ -191,7 +202,7 @@ const summaryController = {
           version: summary.version,
           content: summary.content,
           generatedAt: summary.updatedAt,
-          generatedBy: 'manual-edit'
+          generatedBy: "manual-edit",
         });
 
         summary.content = { ...summary.content, ...content };
@@ -211,15 +222,14 @@ const summaryController = {
       await summary.save();
 
       res.json({
-        message: 'Summary updated successfully',
-        summary
+        message: "Summary updated successfully",
+        summary,
       });
-
     } catch (error) {
-      console.error('Error in updateSummary:', error);
+      console.error("Error in updateSummary:", error);
       res.status(500).json({
-        error: 'Internal server error',
-        message: 'Failed to update summary'
+        error: "Internal server error",
+        message: "Failed to update summary",
       });
     }
   },
@@ -232,29 +242,27 @@ const summaryController = {
 
       if (!summary) {
         return res.status(404).json({
-          error: 'Summary not found',
-          message: 'The specified summary does not exist'
+          error: "Summary not found",
+          message: "The specified summary does not exist",
         });
       }
 
-      await Session.findByIdAndUpdate(
-        summary.session,
-        { $unset: { summary: 1 } }
-      );
+      await Session.findByIdAndUpdate(summary.session, {
+        $unset: { summary: 1 },
+      });
 
       await Summary.findOneAndDelete({ summaryId });
 
       console.log(`Summary deleted: ${summaryId}`);
 
       res.json({
-        message: 'Summary deleted successfully'
+        message: "Summary deleted successfully",
       });
-
     } catch (error) {
-      console.error('Error in deleteSummary:', error);
+      console.error("Error in deleteSummary:", error);
       res.status(500).json({
-        error: 'Internal server error',
-        message: 'Failed to delete summary'
+        error: "Internal server error",
+        message: "Failed to delete summary",
       });
     }
   },
@@ -266,8 +274,8 @@ const summaryController = {
 
       if (!reviewedBy) {
         return res.status(400).json({
-          error: 'Reviewer required',
-          message: 'Please provide reviewer information'
+          error: "Reviewer required",
+          message: "Please provide reviewer information",
         });
       }
 
@@ -275,28 +283,27 @@ const summaryController = {
 
       if (!summary) {
         return res.status(404).json({
-          error: 'Summary not found',
-          message: 'The specified summary does not exist'
+          error: "Summary not found",
+          message: "The specified summary does not exist",
         });
       }
 
       await summary.approve(reviewedBy, reviewNotes);
 
       res.json({
-        message: 'Summary approved successfully',
+        message: "Summary approved successfully",
         summary: {
           summaryId: summary.summaryId,
           isApproved: summary.isApproved,
           reviewedBy: summary.reviewedBy,
-          reviewedAt: summary.reviewedAt
-        }
+          reviewedAt: summary.reviewedAt,
+        },
       });
-
     } catch (error) {
-      console.error('Error in approveSummary:', error);
+      console.error("Error in approveSummary:", error);
       res.status(500).json({
-        error: 'Internal server error',
-        message: 'Failed to approve summary'
+        error: "Internal server error",
+        message: "Failed to approve summary",
       });
     }
   },
@@ -305,42 +312,74 @@ const summaryController = {
     try {
       const { summaryId, format } = req.params;
 
-      if (!['pdf', 'word', 'json'].includes(format)) {
+      if (!["pdf", "word", "json"].includes(format)) {
         return res.status(400).json({
-          error: 'Invalid format',
-          message: 'Supported formats: pdf, word, json'
+          error: "Invalid format",
+          message: "Supported formats: pdf, word, json",
         });
       }
 
-      const summary = await Summary.findOne({ summaryId })
-        .populate('session');
+      const summary = await Summary.findOne({ summaryId }).populate("session");
 
       if (!summary) {
         return res.status(404).json({
-          error: 'Summary not found',
-          message: 'The specified summary does not exist'
+          error: "Summary not found",
+          message: "The specified summary does not exist",
         });
       }
 
-      if (format === 'json') {
-        res.setHeader('Content-Type', 'application/json');
-        res.setHeader('Content-Disposition', `attachment; filename="summary-${summaryId}.json"`);
+      if (format === "json") {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="summary-${summaryId}.json"`,
+        );
         res.json(summary);
+      } else if (format === "pdf") {
+        const PDFDocument = require('pdfkit');
+        const doc = new PDFDocument();
+
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="patient-summary-${summaryId}.pdf"`,
+        );
+
+        doc.pipe(res);
+
+        doc.fontSize(20).text('After-Visit Summary', { align: 'center' });
+        doc.moveDown();
+        
+        if (summary.session && summary.session.doctorName) {
+           doc.fontSize(12).text(`Doctor: Dr. ${summary.session.doctorName}`);
+        }
+        doc.fontSize(12).text(`Date: ${new Date(summary.createdAt).toLocaleDateString()}`);
+        doc.moveDown(2);
+
+        doc.fontSize(14).text('Your Summary & Instructions:');
+        doc.moveDown();
+        
+        const summaryText = summary.patientSummary || "No patient summary available for this session.";
+        doc.fontSize(12).text(summaryText, {
+          align: 'left',
+          lineGap: 4
+        });
+
+        doc.end();
       } else {
         res.status(501).json({
-          error: 'Format not implemented',
-          message: `${format.toUpperCase()} export is not yet implemented`
+          error: "Format not implemented",
+          message: `${format.toUpperCase()} export is not yet implemented`,
         });
       }
-
     } catch (error) {
-      console.error('Error in exportSummary:', error);
+      console.error("Error in exportSummary:", error);
       res.status(500).json({
-        error: 'Internal server error',
-        message: 'Failed to export summary'
+        error: "Internal server error",
+        message: "Failed to export summary",
       });
     }
-  }
+  },
 };
 
 module.exports = summaryController;

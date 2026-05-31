@@ -110,6 +110,38 @@ class GraphService {
             await tx.run(createPatientSymptom, { patientId, name: symp });
           }
         }
+        
+        for (const med of extractedData.medications || []) {
+          const createMed = `
+            MERGE (m:Medication {name: $name})
+            MERGE (s:Session {sessionId: $sessionId})-[:PRESCRIBED_MEDICATION]->(m)
+          `;
+          await tx.run(createMed, { name: med.name, sessionId });
+          if (patientId) {
+            const createPatientMed = `
+              MERGE (p:Patient {patientId: $patientId})
+              MERGE (m:Medication {name: $name})
+              MERGE (p)-[:PRESCRIBED_MEDICATION]->(m)
+            `;
+            await tx.run(createPatientMed, { patientId, name: med.name });
+          }
+        }
+        
+        for (const allergy of extractedData.allergies || []) {
+          const createAllergy = `
+            MERGE (a:Allergy {name: $name})
+            MERGE (s:Session {sessionId: $sessionId})-[:NOTED_ALLERGY]->(a)
+          `;
+          await tx.run(createAllergy, { name: allergy, sessionId });
+          if (patientId) {
+            const createPatientAllergy = `
+              MERGE (p:Patient {patientId: $patientId})
+              MERGE (a:Allergy {name: $name})
+              MERGE (p)-[:HAS_ALLERGY]->(a)
+            `;
+            await tx.run(createPatientAllergy, { patientId, name: allergy });
+          }
+        }
       });
       console.log(`Knowledge Graph updated for session ${sessionId}`);
     } catch (error) {
@@ -128,8 +160,14 @@ class GraphService {
         MATCH (p:Patient {patientId: $patientId})-[:HAS_SESSION]->(s:Session)
         OPTIONAL MATCH (p)-[:HAS_DIAGNOSIS]->(d:Condition)
         OPTIONAL MATCH (p)-[:REPORTED_SYMPTOM]->(y:Symptom)
-        WITH p, collect(s.sessionId) AS sessions, collect(d.name) AS diagnoses, collect(y.name) AS symptoms
-        RETURN p, sessions, diagnoses, symptoms
+        OPTIONAL MATCH (p)-[:PRESCRIBED_MEDICATION]->(m:Medication)
+        OPTIONAL MATCH (p)-[:HAS_ALLERGY]->(a:Allergy)
+        WITH p, collect(DISTINCT s.sessionId) AS sessions, 
+             collect(DISTINCT d.name) AS diagnoses, 
+             collect(DISTINCT y.name) AS symptoms,
+             collect(DISTINCT m.name) AS medications,
+             collect(DISTINCT a.name) AS allergies
+        RETURN p, sessions, diagnoses, symptoms, medications, allergies
       `;
       const result = await session.run(query, { patientId });
       
@@ -142,12 +180,16 @@ class GraphService {
       const sessions = record.get('sessions');
       const diagnoses = record.get('diagnoses');
       const symptoms = record.get('symptoms');
+      const medications = record.get('medications');
+      const allergies = record.get('allergies');
       
       let context = `Patient History Summary:\n`;
       context += `- Patient Name: ${patient.firstName} ${patient.lastName}\n`;
       context += `- Previous Sessions: ${sessions.join(', ')}\n`;
       context += `- Known Diagnoses: ${diagnoses.join(', ')}\n`;
       context += `- Reported Symptoms: ${symptoms.join(', ')}\n`;
+      context += `- Past Medications: ${medications.join(', ')}\n`;
+      context += `- Known Allergies: ${allergies.join(', ')}\n`;
           
       const recentSessionsQuery = `
         MATCH (p:Patient {patientId: $patientId})-[:HAS_SESSION]->(s:Session)

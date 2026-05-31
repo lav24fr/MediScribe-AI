@@ -1,21 +1,23 @@
-const speech = require('@google-cloud/speech');
+const Groq = require('groq-sdk');
 const fs = require('fs');
 const fsp = require('fs').promises;
 const config = require('../config');
 
-let speechClient = null;
+// Polyfill for File object in Node < 20 (required by Groq SDK for file uploads)
+if (typeof File === 'undefined') {
+  globalThis.File = require('node:buffer').File;
+}
+
+let groq = null;
 try {
-  if (config.googleCloudKeyFile) {
-    speechClient = new speech.SpeechClient({
-      keyFilename: config.googleCloudKeyFile,
-      projectId: config.googleCloudProjectId
-    });
-    console.log('Google Cloud Speech client initialized successfully');
+  if (config.groqApiKey) {
+    groq = new Groq({ apiKey: config.groqApiKey });
+    console.log('Groq client initialized successfully for transcription');
   } else {
-    console.warn('Warning: GOOGLE_CLOUD_KEY_FILE not found. Transcription will not work.');
+    console.warn('Warning: GROQ_API_KEY not found. Transcription will not work.');
   }
 } catch (error) {
-  console.error('Failed to initialize Google Cloud Speech client:', error);
+  console.error('Failed to initialize Groq client:', error);
 }
 
 const transcriptionService = {
@@ -25,57 +27,72 @@ const transcriptionService = {
     try {
       console.log(`Starting transcription for file: ${audioFilePath} in language: ${language}`);
 
-      if (!speechClient) {
-        throw new Error('Google Cloud Speech client not configured.');
+      if (!groq) {
+        throw new Error('Groq client not configured.');
       }
 
       await fsp.stat(audioFilePath);
 
-      const audioBytes = await fsp.readFile(audioFilePath);
-
-      const request = {
-        audio: {
-          content: audioBytes.toString('base64'),
-        },
-        config: {
-          encoding: 'WEBM_OPUS',
-          sampleRateHertz: 48000,
-          languageCode: this.getLanguageCode(language),
-          alternativeLanguageCodes: this.getAlternativeLanguages(language),
-          enableAutomaticPunctuation: true,
-          enableWordTimeOffsets: true,
-          enableSpeakerDiarization: true,
-          diarizationSpeakerCount: 2,
-          model: 'latest_long',
-          useEnhanced: true,
-        },
-      };
-
-      const [response] = await speechClient.recognize(request);
+      const transcription = await groq.audio.transcriptions.create({
+        file: fs.createReadStream(audioFilePath),
+        model: 'whisper-large-v3',
+        language: this.getGroqLanguageCode(language),
+        response_format: 'verbose_json',
+      });
       
-      if (!response.results || response.results.length === 0) {
-        throw new Error('No transcription results returned');
+      let finalText = transcription.text;
+      
+      // Post-process with LLM for diarization if it's not a live chunk
+      if (!String(transcriptionId).startsWith('live_') && finalText.trim().length > 0) {
+        try {
+          console.log(`Starting LLM diarization post-processing for ID: ${transcriptionId}`);
+          const prompt = `You are an expert medical transcriptionist. The following text is a raw medical consultation transcript without speaker labels.
+Please restructure and rewrite the text clearly as a dialogue by identifying the speakers. 
+Format the output by prefixing each spoken part with 'Doctor:' or 'Patient:'.
+
+CRITICAL INSTRUCTION: Return ONLY the raw formatted dialogue text. Do NOT include any explanations, notes, thought process, or introductory/concluding text. Do not comment on the conversation. Start immediately with the dialogue.
+
+Transcript: ${finalText}`;
+          
+          const diarizeResponse = await groq.chat.completions.create({
+            messages: [{ role: 'user', content: prompt }],
+            model: 'llama-3.3-70b-versatile',
+          });
+          
+          if (diarizeResponse.choices && diarizeResponse.choices.length > 0) {
+            finalText = diarizeResponse.choices[0].message.content;
+            console.log(`Diarization completed for ID: ${transcriptionId}`);
+          }
+        } catch (llmError) {
+          console.error(`Diarization failed for ID: ${transcriptionId}, falling back to raw text:`, llmError);
+        }
       }
 
       const processingTime = Date.now() - startTime;
       console.log(`Transcription completed in ${processingTime}ms for ID: ${transcriptionId}`);
 
-      const transcriptionText = response.results
-        .map(result => result.alternatives[0].transcript)
-        .join(' ');
-
-      const segments = this.extractSpeakerSegments(response.results);
+      const segments = transcription.segments ? transcription.segments.map(seg => ({
+        text: seg.text,
+        startTime: seg.start,
+        endTime: seg.end,
+        speaker: 0 // Whisper doesn't natively do diarization out of the box
+      })) : [{
+        text: finalText,
+        startTime: 0,
+        endTime: 0,
+        speaker: 0
+      }];
 
       return {
-        text: transcriptionText,
-        language: response.results[0]?.languageCode || this.getLanguageCode(language),
+        text: finalText,
+        language: transcription.language || this.getGroqLanguageCode(language),
         segments: segments,
         metadata: {
-          model: 'google-speech-to-text',
+          model: 'whisper-large-v3',
           processingTime,
-          confidence: response.results[0]?.alternatives[0]?.confidence || 0.9,
-          speakerCount: segments.length > 0 ? Math.max(...segments.map(s => s.speaker || 0)) + 1 : 1,
-          detectedLanguage: response.results[0]?.languageCode,
+          confidence: 0.9,
+          speakerCount: 1,
+          detectedLanguage: transcription.language,
           requestedLanguage: language
         }
       };
@@ -83,108 +100,24 @@ const transcriptionService = {
     } catch (error) {
       const processingTime = Date.now() - startTime;
       console.error(`Transcription failed after ${processingTime}ms:`, error);
-
-      if (error.code) {
-        switch (error.code) {
-          case 3:
-            throw new Error('Invalid audio file format or configuration.');
-          case 7:
-            throw new Error('Invalid Google Cloud credentials.');
-          case 8:
-            throw new Error('Google Cloud API quota exceeded.');
-          case 13:
-            throw new Error('Google Cloud internal error.');
-          default:
-            throw new Error(`Google Cloud Speech API Error (Code ${error.code}): ${error.message}`);
-        }
-      }
-      
       throw new Error(`Transcription failed: ${error.message}`);
     } finally {
       await this.cleanupAudioFile(audioFilePath);
     }
   },
 
-  extractSpeakerSegments(results) {
-    const segments = [];
-    
-    results.forEach(result => {
-      if (result.alternatives && result.alternatives[0]) {
-        const alternative = result.alternatives[0];
-        
-        if (alternative.words) {
-          let currentSpeaker = null;
-          let currentSegment = {
-            text: '',
-            startTime: 0,
-            endTime: 0,
-            speaker: 0
-          };
-          
-          alternative.words.forEach((word, index) => {
-            const speakerTag = word.speakerTag || 0;
-            
-            if (currentSpeaker !== speakerTag) {
-              if (currentSegment.text.trim()) {
-                segments.push({ ...currentSegment });
-              }
-              
-              currentSpeaker = speakerTag;
-              currentSegment = {
-                text: word.word,
-                startTime: parseFloat(word.startTime?.seconds || 0) + parseFloat(word.startTime?.nanos || 0) / 1e9,
-                endTime: parseFloat(word.endTime?.seconds || 0) + parseFloat(word.endTime?.nanos || 0) / 1e9,
-                speaker: speakerTag
-              };
-            } else {
-              currentSegment.text += ' ' + word.word;
-              currentSegment.endTime = parseFloat(word.endTime?.seconds || 0) + parseFloat(word.endTime?.nanos || 0) / 1e9;
-            }
-          });
-          
-          if (currentSegment.text.trim()) {
-            segments.push(currentSegment);
-          }
-        } else {
-          segments.push({
-            text: alternative.transcript,
-            startTime: 0,
-            endTime: 0,
-            speaker: 0
-          });
-        }
-      }
-    });
-    
-    return segments;
-  },
-
-  getLanguageCode(language) {
+  getGroqLanguageCode(language) {
     const languageMap = {
-      'en': 'en-US',
-      'hi': 'hi-IN',
-      'bn': 'bn-IN',
-      'te': 'te-IN',
-      'mr': 'mr-IN',
-      'ta': 'ta-IN',
-      'gu': 'gu-IN',
-      'kn': 'kn-IN'
+      'en': 'en',
+      'hi': 'hi',
+      'bn': 'bn',
+      'te': 'te',
+      'mr': 'mr',
+      'ta': 'ta',
+      'gu': 'gu',
+      'kn': 'kn'
     };
-    return languageMap[language] || 'en-US';
-  },
-
-  getAlternativeLanguages(language) {
-    const alternativeMap = {
-      'en': ['en-US', 'en-GB'],
-      'hi': ['hi-IN', 'hi'],
-      'bn': ['bn-IN', 'bn-BD'],
-      'te': ['te-IN'],
-      'mr': ['mr-IN'],
-      'ta': ['ta-IN', 'ta-LK'],
-      'gu': ['gu-IN'],
-      'kn': ['kn-IN']
-    };
-    return alternativeMap[language] || ['en-US'];
+    return languageMap[language] || 'en';
   },
 
   async cleanupAudioFile(filePath) {
